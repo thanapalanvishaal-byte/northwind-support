@@ -6,6 +6,8 @@ import { CustomerListPage } from './features/customers/CustomerListPage';
 import { CreateTicketPage } from './features/tickets/CreateTicketPage';
 import { TicketDetailPage } from './features/tickets/TicketDetailPage';
 import { TicketListPage } from './features/tickets/TicketListPage';
+import { LoginPage } from './features/auth/LoginPage';
+import { ProtectedRoute } from './auth/ProtectedRoute';
 
 export const router = createBrowserRouter([
   {
@@ -13,11 +15,14 @@ export const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <Navigate to="/tickets" replace /> },
-      { path: 'tickets', element: <TicketListPage /> },
-      { path: 'tickets/new', element: <CreateTicketPage /> },
-      { path: 'tickets/:id', element: <TicketDetailPage /> },
-      { path: 'customers', element: <CustomerListPage /> },
-      { path: 'customers/:id', element: <CustomerDetailPage /> },
+      { path: 'login', element: <LoginPage /> },
+      { element: <ProtectedRoute />, children: [
+        { path: 'tickets', element: <TicketListPage /> },
+        { path: 'tickets/new', element: <CreateTicketPage /> },
+        { path: 'tickets/:id', element: <TicketDetailPage /> },
+        { path: 'customers', element: <CustomerListPage /> },
+        { path: 'customers/:id', element: <CustomerDetailPage /> },
+      ] },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

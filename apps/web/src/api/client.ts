@@ -5,6 +5,7 @@ import type { ProblemDetails } from '../types/api';
  * to the backend; set VITE_API_BASE_URL to point a build somewhere else. See .env.example.
  */
 const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api';
+export const TOKEN_KEY = 'supportdesk.token';
 
 /** A failed HTTP call, carrying the problem document the API returned. */
 export class ApiError extends Error {
@@ -34,11 +35,16 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(localStorage.getItem(TOKEN_KEY) ? { Authorization: `Bearer ${localStorage.getItem(TOKEN_KEY)}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem(TOKEN_KEY);
+      window.dispatchEvent(new Event('supportdesk:unauthorized'));
+    }
     const problem = await readProblem(response);
 
     throw new ApiError(

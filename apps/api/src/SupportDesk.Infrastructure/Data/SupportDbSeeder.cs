@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Identity;
 using SupportDesk.Application.Abstractions;
 using SupportDesk.Domain.Aggregates.Agents;
 using SupportDesk.Domain.Aggregates.Categories;
@@ -17,13 +18,22 @@ namespace SupportDesk.Infrastructure.Data;
 /// Every aggregate is built through its own behaviour. The two historical values no behaviour
 /// produces - a ticket's last update and its due date - are set through EF Core directly.
 /// </remarks>
-public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<SupportDbSeeder> logger)
+public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<SupportDbSeeder> logger, IPasswordHasher<Agent> passwordHasher)
 {
     /// <summary>Seeds the database, unless it already has tickets in it.</summary>
     public async Task SeedAsync(CancellationToken ct = default)
     {
         if (await db.Set<Ticket>().AnyAsync(ct))
         {
+            var existingAgents = await db.Set<Agent>().Where(agent => agent.PasswordHash == string.Empty).ToListAsync(ct);
+            foreach (var agent in existingAgents)
+            {
+                agent.SetPasswordHash(passwordHasher.HashPassword(agent, "vishaal20241185"));
+            }
+            if (existingAgents.Count > 0)
+            {
+                await db.SaveChangesAsync(ct);
+            }
             logger.LogInformation("Seed data already present; skipping.");
             return;
         }
@@ -33,6 +43,11 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
         var categories = SeedCategories();
         var customers = SeedCustomers(now);
         var agents = SeedAgents(now);
+
+        foreach (var agent in agents)
+        {
+            agent.SetPasswordHash(passwordHasher.HashPassword(agent, "vishaal20241185"));
+        }
 
         db.AddRange(categories);
         db.AddRange(customers);
@@ -76,7 +91,7 @@ public sealed class SupportDbSeeder(SupportDbContext db, IClock clock, ILogger<S
 
         return
         [
-            new("Alex Turner", "alex.turner@northwind-support.example", 10, now.AddDays(-500)),
+            new("Vishaal", "vishaal20241185@northwind-support.example", 10, now.AddDays(-500)),
             new("Ben Osei", "ben.osei@northwind-support.example", 8, now.AddDays(-460)),
             new("Priya Nair", "priya.nair@northwind-support.example", 8, now.AddDays(-400)),
             new("Sara Lindqvist", "sara.lindqvist@northwind-support.example", 6, now.AddDays(-280)),
