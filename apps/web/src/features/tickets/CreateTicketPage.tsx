@@ -33,6 +33,13 @@ export function CreateTicketPage() {
           <p>
             Raised <strong>{created.reference}</strong> for {created.customer.name}.
           </p>
+          {created.triage && (
+            <ul>
+              <li>{created.triage.priorityReason}</li>
+              <li>{created.triage.slaReason}</li>
+              <li>{created.triage.assignmentReason}</li>
+            </ul>
+          )}
           <div className="button-row">
             <button
               type="button"

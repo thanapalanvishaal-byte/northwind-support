@@ -14,15 +14,19 @@ namespace SupportDesk.Infrastructure.Queries;
 /// Ticket reads. Projected in the database and never tracked. Aggregates hold only each
 /// other's ids, so the customer, category and agent labels are joined in here, on the read side.
 /// </summary>
-public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQueries
+public sealed class TicketQueries(SupportDbContext db, IClock clock, SlaSettings slaSettings) : ITicketQueries
 {
+    public TicketQueries(SupportDbContext db, IClock clock)
+        : this(db, clock, SlaSettings.Default)
+    {
+    }
     /// <remarks>
     /// Filters, counts, sorts and pages in the database, in that order, so the count and the
     /// pager describe the filtered set rather than every ticket.
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = ApplyFilters(TicketsWithLabels(), query);
+        var tickets = ApplyFilters(TicketsWithLabels(), query, clock.UtcNow, slaSettings.AtRiskThresholdPercent);
 
         var totalCount = await tickets.CountAsync(ct);
 
@@ -106,6 +110,17 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<TicketEscalationDto>> GetEscalationsAsync(int ticketId, CancellationToken ct) =>
+        await db.Set<TicketEscalation>().AsNoTracking()
+            .Where(e => e.TicketId == ticketId)
+            .OrderByDescending(e => e.EscalatedAtUtc)
+            .Select(e => new TicketEscalationDto(
+                e.Id, e.FromPriority, e.ToPriority,
+                e.FromAgentId == null ? null : db.Set<Agent>().Where(a => a.Id == e.FromAgentId).Select(a => new AgentSummaryDto(a.Id, a.FullName)).FirstOrDefault(),
+                e.ToAgentId == null ? null : db.Set<Agent>().Where(a => a.Id == e.ToAgentId).Select(a => new AgentSummaryDto(a.Id, a.FullName)).FirstOrDefault(),
+                e.FromDueAtUtc, e.ToDueAtUtc, e.Reason, e.EscalatedBy, e.EscalatedAtUtc))
+            .ToListAsync(ct);
+
     /// <summary>
     /// Every ticket with the rows that label it. Filter and sort this, then project.
     /// </summary>
@@ -123,7 +138,9 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
     /// </summary>
     private static IQueryable<TicketWithLabels> ApplyFilters(
         IQueryable<TicketWithLabels> source,
-        TicketQuery query)
+        TicketQuery query,
+        DateTime now,
+        double atRiskThresholdPercent)
     {
         var search = query.Search?.Trim();
         var status = query.Status;
@@ -139,12 +156,29 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
             .WhereIf(customerId is not null, x => x.Ticket.CustomerId == customerId)
             .WhereIf(agentId is not null, x => x.Ticket.AssignedAgentId == agentId)
             .WhereIf(query.UnassignedOnly, x => x.Ticket.AssignedAgentId == null)
+            .WhereIf(query.SlaStatus == SlaStatus.NotApplicable, x => x.Ticket.DueAtUtc == null)
+            .WhereIf(query.SlaStatus == SlaStatus.Met, x => x.Ticket.DueAtUtc != null &&
+                x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc <= x.Ticket.DueAtUtc)
+            .WhereIf(query.SlaStatus == SlaStatus.Breached, x => x.Ticket.DueAtUtc != null &&
+                ((x.Ticket.ResolvedAtUtc != null && x.Ticket.ResolvedAtUtc > x.Ticket.DueAtUtc) ||
+                 (x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc < now)))
+            .WhereIf(query.SlaStatus == SlaStatus.AtRisk, x => x.Ticket.DueAtUtc != null &&
+                x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc >= now &&
+                EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc.Value) <=
+                    EF.Functions.DateDiffSecond(x.Ticket.SlaStartedAtUtc ?? x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value) *
+                    (atRiskThresholdPercent / 100.0))
+            .WhereIf(query.SlaStatus == SlaStatus.WithinSla, x => x.Ticket.DueAtUtc != null &&
+                x.Ticket.ResolvedAtUtc == null && x.Ticket.DueAtUtc >= now &&
+                EF.Functions.DateDiffSecond(now, x.Ticket.DueAtUtc.Value) >
+                    EF.Functions.DateDiffSecond(x.Ticket.SlaStartedAtUtc ?? x.Ticket.CreatedAtUtc, x.Ticket.DueAtUtc.Value) *
+                    (atRiskThresholdPercent / 100.0))
             .WhereIf(
                 !string.IsNullOrEmpty(search),
                 x => x.Ticket.Title.Contains(search!)
                     || x.Ticket.Reference.Contains(search!)
                     || x.Customer.Name.Contains(search!));
     }
+
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
     {

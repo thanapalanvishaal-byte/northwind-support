@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using SupportDesk.Application.Contracts.Common;
 using SupportDesk.Application.Contracts.Tickets;
+using SupportDesk.Application.Abstractions;
 using SupportDesk.Application.Features.Tickets.Commands.AssignTicket;
 using SupportDesk.Application.Features.Tickets.Commands.ChangeTicketStatus;
 using SupportDesk.Application.Features.Tickets.Commands.RaiseTicket;
+using SupportDesk.Application.Features.Tickets.Commands.EscalateTicket;
 using SupportDesk.Application.Features.Tickets.Queries.GetTicket;
 using SupportDesk.Application.Features.Tickets.Queries.SearchTickets;
 
@@ -56,4 +58,20 @@ public sealed class TicketsController : ControllerBase
         [FromServices] AssignTicketCommandHandler handler,
         CancellationToken ct) =>
         handler.HandleAsync(id, request, ct);
+
+    [HttpPost("{id:int}/escalate")]
+    public async Task<ActionResult<TicketDetailDto>> Escalate(
+        int id,
+        EscalateTicketRequest request,
+        [FromServices] EscalateTicketCommandHandler handler,
+        CancellationToken ct) => Ok(await handler.HandleAsync(id, request,
+            User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? string.Empty, ct));
+
+    [HttpGet("{id:int}/escalations")]
+    public async Task<IReadOnlyList<TicketEscalationDto>> Escalations(
+        int id, [FromServices] ITicketQueries queries, CancellationToken ct)
+    {
+        _ = await Get(id, HttpContext.RequestServices.GetRequiredService<GetTicketQueryHandler>(), ct);
+        return await queries.GetEscalationsAsync(id, ct);
+    }
 }

@@ -7,6 +7,7 @@ using SupportDesk.Infrastructure.Data;
 using SupportDesk.Infrastructure.Queries;
 using SupportDesk.Infrastructure.Repositories;
 using SupportDesk.Infrastructure.Services;
+using SupportDesk.Domain.Aggregates.Tickets;
 
 namespace SupportDesk.Infrastructure;
 
@@ -30,6 +31,23 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<SupportDbContext>());
 
         services.AddSingleton<IClock, SystemClock>();
+
+        double SlaValue(string key, double fallback) =>
+            double.TryParse(configuration[key], out var value) ? value : fallback;
+
+        var sla = new SlaSettings(
+            new Dictionary<TicketPriority, double>
+            {
+                [TicketPriority.Low] = SlaValue("Sla:BaseWindowHours:Low", 72),
+                [TicketPriority.Medium] = SlaValue("Sla:BaseWindowHours:Medium", 24),
+                [TicketPriority.High] = SlaValue("Sla:BaseWindowHours:High", 8),
+                [TicketPriority.Critical] = SlaValue("Sla:BaseWindowHours:Critical", 4)
+            },
+            SlaValue("Sla:PremiumCustomerMultiplier", 0.5),
+            SlaValue("Sla:MinimumWindowHours", 1),
+            SlaValue("Sla:AtRiskThresholdPercent", 25));
+        services.AddSingleton(sla);
+        services.AddSingleton<SlaPolicy>();
 
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
