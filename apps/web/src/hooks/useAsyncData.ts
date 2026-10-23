@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toErrorMessage } from '../api/client';
 
 interface AsyncState<T> {
@@ -22,14 +22,23 @@ export interface AsyncData<T> extends AsyncState<T> {
  */
 export function useAsyncData<T>(load: () => Promise<T>, errorMessage: string): AsyncData<T> {
   const [state, setState] = useState<AsyncState<T>>({ isLoading: true });
+  const latestRun = useRef(0);
 
   const run = useCallback(async () => {
+    // Only the most recent call may write state, so a slow earlier response cannot overwrite
+    // a newer one when filters change quickly.
+    const thisRun = ++latestRun.current;
     setState((current) => ({ ...current, isLoading: true, error: undefined }));
 
     try {
       const data = await load();
-      setState({ isLoading: false, data });
+      if (thisRun === latestRun.current) {
+        setState({ isLoading: false, data });
+      }
     } catch (error) {
+      if (thisRun !== latestRun.current) {
+        return;
+      }
       setState((current) => ({
         ...current,
         isLoading: false,
