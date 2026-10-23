@@ -13,6 +13,8 @@ namespace SupportDesk.Domain.Aggregates.Tickets;
 /// </remarks>
 public sealed class Ticket : AggregateRoot
 {
+    private readonly List<TicketEscalation> _escalations = [];
+
     private Ticket()
     {
         // For EF Core.
@@ -44,6 +46,15 @@ public sealed class Ticket : AggregateRoot
     public DateTime? DueAtUtc { get; private set; }
 
     public DateTime? ResolvedAtUtc { get; private set; }
+
+    /// <summary>
+    /// When the current SLA window began: creation, or the latest escalation. The at-risk
+    /// threshold is measured against the window from this moment to the due date. Null for
+    /// tickets that predate it; use <see cref="CreatedAtUtc"/> then.
+    /// </summary>
+    public DateTime? SlaStartedAtUtc { get; private set; }
+
+    public IReadOnlyCollection<TicketEscalation> Escalations => _escalations;
 
     /// <summary>True while the ticket still needs work from an agent.</summary>
     public bool IsOpen => Status is not (TicketStatus.Resolved or TicketStatus.Closed);
@@ -110,5 +121,78 @@ public sealed class Ticket : AggregateRoot
     {
         AssignedAgentId = agentId;
         UpdatedAtUtc = nowUtc;
+    }
+
+    /// <summary>Sets the SLA due date and the moment its window started (BR-2, BR-3).</summary>
+    public void StartSla(DateTime dueAtUtc, DateTime startedAtUtc)
+    {
+        DueAtUtc = dueAtUtc;
+        SlaStartedAtUtc = startedAtUtc;
+    }
+
+    /// <summary>Why this ticket cannot be escalated right now, or null when it can.</summary>
+    public string? EscalationBlockedReason =>
+        Priority == TicketPriority.Critical
+            ? $"Ticket {Reference} is already Critical and cannot be escalated further."
+        : !IsOpen
+            ? $"Ticket {Reference} is {Status} and cannot be escalated."
+        : null;
+
+    public bool CanEscalate => EscalationBlockedReason is null;
+
+    /// <summary>
+    /// Raises the priority one level and records it (BR-7). The caller works out the new due
+    /// date and owner with the SLA and assignment rules, because those need data this
+    /// aggregate does not hold; this method guards the ticket's own rules and keeps the
+    /// history row and the ticket in step.
+    /// </summary>
+    public TicketEscalation Escalate(
+        string reason,
+        string escalatedBy,
+        DateTime newDueAtUtc,
+        int? newAgentId,
+        DateTime nowUtc)
+    {
+        var trimmedReason = reason?.Trim() ?? string.Empty;
+        var trimmedBy = escalatedBy?.Trim() ?? string.Empty;
+
+        if (trimmedReason.Length is < TicketEscalation.ReasonMinLength or > TicketEscalation.ReasonMaxLength)
+        {
+            throw new ArgumentException(
+                $"The reason must be {TicketEscalation.ReasonMinLength} to {TicketEscalation.ReasonMaxLength} characters.",
+                nameof(reason));
+        }
+
+        if (trimmedBy.Length is 0 or > TicketEscalation.EscalatedByMaxLength)
+        {
+            throw new ArgumentException(
+                $"Who escalated the ticket is required and at most {TicketEscalation.EscalatedByMaxLength} characters.",
+                nameof(escalatedBy));
+        }
+
+        if (EscalationBlockedReason is { } blocked)
+        {
+            throw new BusinessRuleViolationException(blocked);
+        }
+
+        var escalation = new TicketEscalation(
+            Priority,
+            (TicketPriority)((int)Priority + 1),
+            AssignedAgentId,
+            newAgentId,
+            DueAtUtc,
+            newDueAtUtc,
+            trimmedReason,
+            trimmedBy,
+            nowUtc);
+
+        Priority = escalation.ToPriority;
+        AssignedAgentId = newAgentId;
+        DueAtUtc = newDueAtUtc;
+        SlaStartedAtUtc = nowUtc;
+        UpdatedAtUtc = nowUtc;
+        _escalations.Add(escalation);
+
+        return escalation;
     }
 }
