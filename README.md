@@ -15,9 +15,9 @@ Full requirements are in **[`ASSIGNMENT_CANDIDATE.md`](ASSIGNMENT_CANDIDATE.md)*
 | # | Task | Done looks like | Effort |
 | --- | --- | --- | --- |
 | 1 | **Fix a defect, add server-side filtering** | Root cause fixed with a regression test; every list filter applied in the database with a correct count | ~2.5 h |
-| 2 | **Ticket escalation & assignment** | Automatic triage on create, escalation with history, SLA status, UI for all of it | ~7 h |
+| 2 | **Ticket escalation & assignment** | Automatic triage on create, escalation with history, SLA status, UI for all of it | implemented |
 | 3 | **Login and authentication** | Agents sign in; API rejects unauthenticated calls; login UI | ~4 h |
-| 4 | **Dockerise the API** *(optional)* | `docker compose up` gives a migrated, seeded API with no baked-in secret | ~1.5 h |
+| 4 | **Dockerise the API** *(optional)* | `docker compose up` gives a migrated, seeded API with no baked-in secret | implemented |
 
 ### Guidance
 
@@ -87,16 +87,46 @@ Both pass on a clean checkout and neither needs a database.
 
 | Endpoint | Description |
 | --- | --- |
-| `GET /api/tickets` | Paged list with `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `sortBy`, `sortDirection`. **Filters are accepted but not applied yet** (Task 1). |
+| `GET /api/tickets` | Paged list with server-side `search`, `status`, `priority`, `categoryId`, `customerId`, `assignedAgentId`, `unassignedOnly`, `slaStatus`, `sortBy`, and `sortDirection`. |
 | `GET /api/tickets/{id}` | One ticket |
 | `POST /api/tickets` | Create a ticket |
 | `PATCH /api/tickets/{id}/status` · `/assignment` | Change status / assignee |
 | `GET /api/customers` · `/api/agents` · `/api/categories` | Reference data |
+| `POST /api/auth/login` · `GET /api/auth/me` | Agent JWT authentication |
 
 Errors are `ProblemDetails`: `400` validation, `404` not found, `409` conflict or business rule.
 
 **Seed data:** 5 categories, 6 customers (3 Premium), 6 agents (one inactive, one at their limit)
 and 40 tickets across every status, priority and SLA state.
+
+## Implementation notes
+
+Task 1's defect was caused by the request being built from a stale filter snapshot: the effect
+observed the debounced search value, so changing another filter could leave the request key
+unchanged until search changed. The fix derives the request from the whole filter object while
+debouncing only `search`; the regression test asserts the request emitted after a status change.
+
+Task 2 triage applies category-forced Critical priority, the requested priority or Medium, the
+configured SLA window and the premium half-window floor, then chooses the least-loaded eligible
+agent. Agent ties use the lowest id. Escalation raises one level, recalculates from the current
+clock, rechecks ownership and writes `TicketEscalations`; the `(TicketId, EscalatedAtUtc)` index
+serves newest-first history reads. `slaStatus` is derived and the list predicates run before
+counting/paging in EF.
+
+The API container is `http://localhost:5080`; `/health` is unauthenticated and checks database
+reachability. Run `docker compose up --build`, then use `VITE_API_PROXY_TARGET=http://localhost:5080
+npm run web`. The local compose migration flag is convenient for a fresh demo volume; production
+should apply reviewed migrations in a deployment job before starting the application.
+
+## Known limitations
+
+Authentication uses a hashed development credential, JWT bearer tokens with an eight-hour lifetime,
+an environment/configuration signing key, and browser local storage for the token. Development login:
+email `vishaal20241185@northwind-support.example`, password `vishaal20241185`. Registration, password reset,
+OAuth/SSO, MFA, refresh tokens, roles, notifications, background jobs, caching, and Kubernetes
+remain out of scope.
+
+See [APPROACH.md](APPROACH.md) for design decisions, verification, and AI-assisted workflow.
 
 ## Troubleshooting
 

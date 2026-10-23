@@ -23,5 +23,20 @@ services:
       retries: 12
       start_period: 20s
 
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "5080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Production}"
+      RUN_MIGRATIONS: "true"
+      Jwt__SigningKey: "${Jwt__SigningKey:-local-only-change-this-development-signing-key-2026}"
+      ConnectionStrings__Default: "Server=sqlserver,1433;Database=SupportDesk;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Local_Dev_Password1};TrustServerCertificate=True;Encrypt=False"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+
 volumes:
   supportdesk-sql:
