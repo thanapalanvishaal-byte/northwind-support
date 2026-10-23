@@ -17,13 +17,12 @@ namespace SupportDesk.Infrastructure.Queries;
 public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQueries
 {
     /// <remarks>
-    /// Sorts and pages every ticket. The filter values bound into <paramref name="query"/>
-    /// (search, status, priority, category, customer, agent, unassigned-only) are not applied
-    /// yet: server-side filtering is still to be built.
+    /// Filters, counts, sorts and pages in the database, in that order, so the count and the
+    /// pager describe the filtered set rather than every ticket.
     /// </remarks>
     public async Task<PagedResult<TicketListItemDto>> GetPagedAsync(TicketQuery query, CancellationToken ct)
     {
-        var tickets = TicketsWithLabels();
+        var tickets = ApplyFilters(TicketsWithLabels(), query);
 
         var totalCount = await tickets.CountAsync(ct);
 
@@ -116,6 +115,36 @@ public sealed class TicketQueries(SupportDbContext db, IClock clock) : ITicketQu
         join category in db.Set<Category>() on ticket.CategoryId equals category.Id
         from agent in db.Set<Agent>().Where(a => a.Id == ticket.AssignedAgentId).DefaultIfEmpty()
         select new TicketWithLabels { Ticket = ticket, Customer = customer, Category = category, Agent = agent };
+
+    /// <summary>
+    /// One line per filter, each ignored when its value is not supplied; supplied filters
+    /// combine with AND. Adding a filter (for example an SLA status) means adding one line here
+    /// and one property on <see cref="TicketQuery"/>.
+    /// </summary>
+    private static IQueryable<TicketWithLabels> ApplyFilters(
+        IQueryable<TicketWithLabels> source,
+        TicketQuery query)
+    {
+        var search = query.Search?.Trim();
+        var status = query.Status;
+        var priority = query.Priority;
+        var categoryId = query.CategoryId;
+        var customerId = query.CustomerId;
+        var agentId = query.AssignedAgentId;
+
+        return source
+            .WhereIf(status is not null, x => x.Ticket.Status == status)
+            .WhereIf(priority is not null, x => x.Ticket.Priority == priority)
+            .WhereIf(categoryId is not null, x => x.Ticket.CategoryId == categoryId)
+            .WhereIf(customerId is not null, x => x.Ticket.CustomerId == customerId)
+            .WhereIf(agentId is not null, x => x.Ticket.AssignedAgentId == agentId)
+            .WhereIf(query.UnassignedOnly, x => x.Ticket.AssignedAgentId == null)
+            .WhereIf(
+                !string.IsNullOrEmpty(search),
+                x => x.Ticket.Title.Contains(search!)
+                    || x.Ticket.Reference.Contains(search!)
+                    || x.Customer.Name.Contains(search!));
+    }
 
     private static IQueryable<TicketWithLabels> ApplySort(IQueryable<TicketWithLabels> source, TicketQuery query)
     {
